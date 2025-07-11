@@ -1,0 +1,27 @@
+// Author: Florin-Petru Mitrea
+// References: https://www.ontinue.com/resource/blog-svg-smuggling/
+let lookback = 7d;
+let SVGRegex = @"(?i).*\.svg(\..*)?$";
+let Browsers = dynamic([ "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe" ]);
+let SuspiciousSVGEmails = materialize(
+    EmailAttachmentInfo
+    | where TimeGenerated > ago(lookback)
+    | where FileType == "xml" and FileName matches regex SVGRegex
+    | join kind=inner (
+        EmailEvents
+        | where TimeGenerated > ago(lookback)
+    ) on NetworkMessageId
+    | extend RecipientEmailAddress = tolower(RecipientEmailAddress)
+    | summarize by NetworkMessageId, Subject, FileName, RecipientEmailAddress
+);
+let SuspiciousSVGFileNames = materialize(
+    SuspiciousSVGEmails
+    | summarize by FileName
+);
+DeviceProcessEvents
+| where TimeGenerated > ago(lookback)
+| where ProcessCommandLine has_any (SuspiciousSVGFileNames)
+| where FolderPath has_any (Browsers)
+| extend AccountUpn = tolower(AccountUpn)
+| extend SvgCLIFileName=extract(@"([^\\]+\.svg(?:\.\w+)*)",1,ProcessCommandLine)
+| join kind=inner SuspiciousSVGEmails on $left.AccountUpn == $right.RecipientEmailAddress and $left.SvgCLIFileName == $right.FileName
